@@ -1,35 +1,32 @@
-#include <termios.h>
-#include <unistd.h>
 #include "console.h"
-#include <unistd.h>
-#include <sys/wait.h>
 #include <cstdlib>
 #include <string>
-#include <iostream>
+#include <sys/wait.h>
+#include <termios.h>
+#include <unistd.h>
 
-struct termios orig_termios;
+static struct termios cooked;
+static bool cooked_saved = false;
 
-void enable_raw_mode() {
-    tcgetattr(STDIN_FILENO, &orig_termios);
-
-    struct termios raw = orig_termios;
-    raw.c_lflag &= ~(ECHO | ICANON | ISIG | IEXTEN);
-    raw.c_iflag &= ~(IXON | ICRNL | BRKINT | INPCK | ISTRIP);
-
-    raw.c_cflag |= CS8;
-    raw.c_cc[VMIN] = 1;
-    raw.c_cc[VTIME] = 0;
-
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
-}
-
-void disable_raw_mode() {
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
-}
+void enable_raw_mode() {}
+void disable_raw_mode() {}
 
 void execute_cmd(const std::string& cmd)
 {
-    disable_raw_mode();
+    // save current terminal state and restore cooked mode for child
+    struct termios current;
+    tcgetattr(STDIN_FILENO, &current);
+    if (!cooked_saved)
+    {
+        cooked = current;
+        cooked_saved = true;
+    }
+    struct termios cook = current;
+    cook.c_lflag |= (ECHO | ICANON | ISIG | IEXTEN);
+    cook.c_iflag |= (IXON | ICRNL);
+    cook.c_oflag |= OPOST;
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &cook);
+
     pid_t pid = fork();
     if (pid == 0)
     {
@@ -41,5 +38,8 @@ void execute_cmd(const std::string& cmd)
         int status;
         waitpid(pid, &status, 0);
     }
-    enable_raw_mode();
+
+    // restore terminal state replxx expects
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &current);
+    write(STDOUT_FILENO, "\r", 1);
 }

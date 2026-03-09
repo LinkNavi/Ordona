@@ -1,3 +1,4 @@
+#pragma once
 #include <string>
 
 void enable_raw_mode();
