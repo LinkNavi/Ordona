@@ -20,13 +20,13 @@ inc = include_directories('include')
 
 # Platform-specific sources
 if is_windows
-    sources += files('src/process_windows.cpp', 'src/consoleWin.cpp')
+    sources += files( 'src/consoleWin.cpp')
 else
-    sources += files('src/process_unix.cpp', 'src/consoleUnix.cpp')
+    sources += files( 'src/consoleUnix.cpp')
 endif
 
 # Dependencies
-readline_dep = dependency('', required : false)  # placeholder
+readline_dep = dependency('readline', required : false)  # placeholder
 
 if not is_windows
     readline_dep = dependency('readline', required : false)

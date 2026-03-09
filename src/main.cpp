@@ -4,10 +4,10 @@
 #include <string>
 
 int main() {
-    setup_raw_mode();
+    enable_raw_mode();
 
     while (true) {
-        draw_prompt();
+
 
         std::string input = read_line();
         if (input.empty()) continue;

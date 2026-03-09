@@ -3,20 +3,17 @@
 #include <string>
 void draw_prompt()
 {
-    std::cout<<"$> ";
+    std::cout<<"\r$> ";
 }
 
 void take_input(std::string input)
 {
-    switch (input)
+    if (input == "test")
     {
-        case 'test':
-            {
-                std::cout<<"test"<<std::endl;
-            }
-        default:
-            {
-                exe
-            }
+        std::cout << "test" << std::endl;
+    }
+    else
+    {
+        execute_cmd(input);
     }
 }
