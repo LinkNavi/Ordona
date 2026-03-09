@@ -1,8 +1,10 @@
 #include "console.h"
 #include "ordona.h"
 #include "predictor.h"
+#include "terminal.h"
 #include <csignal>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -11,16 +13,13 @@
 #include <string>
 #include <unistd.h>
 #include <unordered_map>
-#include <cstring>
+
 namespace fs = std::filesystem;
 
 std::unordered_map<std::string, std::string> aliases;
-replxx::Replxx rx;
+LineEditor editor;
 
-// default prompt — user can override in ~/.ordonarc or config
-std::string prompt_format = "\x01\x1b[34m\x02{cwd}\x01\x1b[0m\x02 \x01\x1b[33m\x02({branch})\x01\x1b[0m\x02 \x01\x1b[32m\x02$>\x01\x1b[0m\x02 ";
-
-// ── signal ────────────────────────────────────────────────────
+std::string prompt_format = "\x1b[34m{cwd}\x1b[0m \x1b[33m({branch})\x1b[0m \x1b[32m$>\x1b[0m ";
 
 // ── paths ─────────────────────────────────────────────────────
 
@@ -37,10 +36,10 @@ static std::string ordona_dir()
 #endif
 }
 
-std::string get_config_path()    { return ordona_dir() + "ordona.conf";   }
+std::string get_config_path()    { return ordona_dir() + "ordona.conf"; }
 std::string get_history_path()   { return ordona_dir() + "ordona_history"; }
-std::string get_alias_path()     { return ordona_dir() + "alias";          }
-std::string get_predictor_path() { return ordona_dir() + "ordona_ngram";   }
+std::string get_alias_path()     { return ordona_dir() + "alias"; }
+std::string get_predictor_path() { return ordona_dir() + "ordona_ngram"; }
 
 std::string get_rc_path()
 {
@@ -89,10 +88,8 @@ std::string resolve_env_vars(const std::string& input)
     {
         if (input[i] == '$' && i + 1 < input.size())
         {
-            size_t start = i + 1;
-            size_t end   = start;
-            while (end < input.size() && (isalnum(input[end]) || input[end] == '_'))
-                ++end;
+            size_t start = i + 1, end = start;
+            while (end < input.size() && (isalnum(input[end]) || input[end] == '_')) ++end;
             std::string var = input.substr(start, end - start);
             const char* val = getenv(var.c_str());
             if (val) out += val;
@@ -110,8 +107,7 @@ std::string resolve_aliases(const std::string& input)
     ss >> first;
     std::getline(ss, rest);
     auto it = aliases.find(first);
-    if (it != aliases.end())
-        return it->second + rest;
+    if (it != aliases.end()) return it->second + rest;
     return input;
 }
 
@@ -129,29 +125,8 @@ static std::string git_branch()
     return branch;
 }
 
-// Wrap \x1b[...m sequences with \x01..\x02 so replxx knows they're non-printing
-static std::string wrap_ansi(const std::string& s)
-{
-    std::string out;
-    for (size_t i = 0; i < s.size(); ++i)
-    {
-        if (s[i] == '\x1b' && i + 1 < s.size() && s[i+1] == '[')
-        {
-            if (i > 0 && s[i-1] == '\x01') { out += s[i]; continue; }
-            out += '\x01';
-            while (i < s.size() && s[i] != 'm') out += s[i++];
-            out += 'm';
-            out += '\x02';
-        }
-        else out += s[i];
-    }
-    return out;
-}
-
-// Replace {token} placeholders in prompt_format
 static std::string make_prompt()
 {
-    // gather values
     std::string cwd;
     try {
         cwd = fs::current_path().string();
@@ -169,12 +144,10 @@ static std::string make_prompt()
     if (!user) user = getenv("USERNAME");
     if (!user) user = "";
 
-    // time
     time_t now = time(nullptr);
     char timebuf[16] = {};
     strftime(timebuf, sizeof(timebuf), "%H:%M:%S", localtime(&now));
 
-    // replace tokens
     auto replace = [](std::string s, const std::string& tok, const std::string& val) {
         size_t pos;
         while ((pos = s.find(tok)) != std::string::npos)
@@ -183,26 +156,20 @@ static std::string make_prompt()
     };
 
     std::string out = prompt_format;
-    out = replace(out, "{cwd}",    cwd);
+    out = replace(out, "{cwd}", cwd);
     out = replace(out, "{branch}", branch.empty() ? "" : branch);
-    out = replace(out, "{user}",   user);
-    out = replace(out, "{host}",   hostname);
-    out = replace(out, "{time}",   timebuf);
+    out = replace(out, "{user}", user);
+    out = replace(out, "{host}", hostname);
+    out = replace(out, "{time}", timebuf);
 
-    // strip {branch} wrapper if no branch (e.g. user wrote "({branch})" outside a git repo)
-    // if branch is empty, also remove surrounding parens if they were wrapping it
     if (branch.empty())
     {
-        // clean up lone "()" left behind
         size_t pos;
-        while ((pos = out.find("()")) != std::string::npos)
-            out.erase(pos, 2);
-        // clean up double spaces
-        while ((pos = out.find("  ")) != std::string::npos)
-            out.replace(pos, 2, " ");
+        while ((pos = out.find("()")) != std::string::npos) out.erase(pos, 2);
+        while ((pos = out.find("  ")) != std::string::npos) out.replace(pos, 2, " ");
     }
 
-    return wrap_ansi(out);
+    return out;
 }
 
 // ── built-ins ─────────────────────────────────────────────────
@@ -227,7 +194,6 @@ static bool handle_builtin(const std::string& input)
         }
         return true;
     }
-
     if (cmd == "export")
     {
         std::string pair;
@@ -237,7 +203,6 @@ static bool handle_builtin(const std::string& input)
             setenv(pair.substr(0, eq).c_str(), pair.substr(eq + 1).c_str(), 1);
         return true;
     }
-
     if (cmd == "prompt")
     {
         std::string fmt;
@@ -246,7 +211,6 @@ static bool handle_builtin(const std::string& input)
         if (!fmt.empty()) prompt_format = fmt;
         return true;
     }
-
     return false;
 }
 
@@ -284,26 +248,20 @@ void load_aliases()
     }
 }
 
-// ── rc file ───────────────────────────────────────────────────
-// ~/.ordonarc supports: alias, export, prompt, and any shell command
+// ── rc / config ───────────────────────────────────────────────
 
 void load_rc()
 {
     std::string path = get_rc_path();
     if (path.empty() || !fs::exists(path)) return;
-
     std::ifstream f(path);
     std::string line;
     while (std::getline(f, line))
     {
-        // skip blank lines and comments
         if (line.empty() || line[0] == '#') continue;
         take_input(line);
     }
 }
-
-// ── config file ───────────────────────────────────────────────
-// simple key=value, currently supports: prompt
 
 void load_config()
 {
@@ -321,31 +279,14 @@ void load_config()
     }
 }
 
-// ── hint callback ─────────────────────────────────────────────
-
-static replxx::Replxx::hints_t hint_callback(
-    const std::string& input, int& ctx_len, replxx::Replxx::Color& color)
-{
-    replxx::Replxx::hints_t hints;
-    if (input.empty()) return hints;
-    std::string suggestion = predictor_suggest(input);
-    if (!suggestion.empty())
-    {
-        color = replxx::Replxx::Color::GRAY;
-        hints.emplace_back(suggestion);
-    }
-    ctx_len = static_cast<int>(input.size());
-    return hints;
-}
-
 // ── readline ──────────────────────────────────────────────────
 
 std::string read_line()
 {
-    const char* buf = rx.input(make_prompt());
-    if (!buf) suicide();
-    std::string input(buf);
-    if (!input.empty()) rx.history_add(input);
+    bool eof = false;
+    std::string input = editor.readline(make_prompt(), eof);
+    if (eof) suicide();
+    if (!input.empty()) editor.history_add(input);
     return input;
 }
 
@@ -353,10 +294,10 @@ std::string read_line()
 
 void suicide()
 {
-    rx.history_save(get_history_path());
+    editor.history_save(get_history_path());
     predictor_save(get_predictor_path());
     save_aliases();
-    disable_raw_mode();
+    term_disable_raw();
     std::cout << "\r\nBye!\n";
     exit(0);
 }
@@ -364,16 +305,13 @@ void suicide()
 void init()
 {
     load_aliases();
-    rx.set_hint_callback(hint_callback);
-    rx.set_word_break_characters(" \t\n\"\\'`@$><=;|&{(");
-    rx.set_max_history_size(1000);
-    rx.history_load(get_history_path());
-    predictor_load(get_predictor_path());
 
-    // Ctrl+C clears the line instead of exiting
-    rx.bind_key(replxx::Replxx::KEY::control('C'), [&](char32_t code) -> replxx::Replxx::ACTION_RESULT {
-        return rx.invoke(replxx::Replxx::ACTION::CLEAR_SELF, code);
+    editor.set_hint_callback([](const std::string& input) -> std::string {
+        return predictor_suggest(input);
     });
+    editor.set_max_history(1000);
+    editor.history_load(get_history_path());
+    predictor_load(get_predictor_path());
 
     if (!config_exists())
         writeToFile(get_config_path(), "# Ordona config\n# prompt={cwd} ({branch}) $>\n");
@@ -382,7 +320,6 @@ void init()
 
     load_rc();
 }
-
 
 void draw_prompt() {}
 

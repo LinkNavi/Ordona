@@ -1,10 +1,9 @@
 #pragma once
-
-#include <replxx.hxx>
+#include "line_editor.h"
 #include <string>
 #include <unordered_map>
 
-extern replxx::Replxx rx;
+extern LineEditor editor;
 extern std::unordered_map<std::string, std::string> aliases;
 extern std::string prompt_format;
 
