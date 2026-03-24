@@ -11,6 +11,8 @@ sources = files(
     'src/main.cpp',
     'src/ordona.cpp',
     'src/predictor.cpp',
+    'src/plugin_loader.cpp',
+    'src/git.cpp',
     'src/line_editor.cpp',
 )
 

@@ -12,8 +12,15 @@
 #include <sstream>
 #include <string>
 #include <unistd.h>
+#include "plugin_loader.h"
 #include <unordered_map>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
+#ifdef _WIN32
+#include <direct.h>
+#endif
 namespace fs = std::filesystem;
 
 std::unordered_map<std::string, std::string> aliases;
@@ -23,30 +30,31 @@ std::string prompt_format = "\x1b[34m{cwd}\x1b[0m \x1b[33m({branch})\x1b[0m \x1b
 
 // ── paths ─────────────────────────────────────────────────────
 
-static std::string ordona_dir()
+std::string ordona_dir()
 {
 #ifdef _WIN32
-    const char* base = getenv("APPDATA");
+    const char *base = getenv("APPDATA");
     return base ? std::string(base) + "/Ordona/" : "";
 #else
-    const char* xdg = getenv("XDG_CONFIG_HOME");
-    if (xdg) return std::string(xdg) + "/Ordona/";
-    const char* home = getenv("HOME");
+    const char *xdg = getenv("XDG_CONFIG_HOME");
+    if (xdg)
+        return std::string(xdg) + "/Ordona/";
+    const char *home = getenv("HOME");
     return home ? std::string(home) + "/.config/Ordona/" : "";
 #endif
 }
 
-std::string get_config_path()    { return ordona_dir() + "ordona.conf"; }
-std::string get_history_path()   { return ordona_dir() + "ordona_history"; }
-std::string get_alias_path()     { return ordona_dir() + "alias"; }
+std::string get_config_path() { return ordona_dir() + "ordona.conf"; }
+std::string get_history_path() { return ordona_dir() + "ordona_history"; }
+std::string get_alias_path() { return ordona_dir() + "alias"; }
 std::string get_predictor_path() { return ordona_dir() + "ordona_ngram"; }
 
 std::string get_rc_path()
 {
 #ifdef _WIN32
-    const char* home = getenv("USERPROFILE");
+    const char *home = getenv("USERPROFILE");
 #else
-    const char* home = getenv("HOME");
+    const char *home = getenv("HOME");
 #endif
     return home ? std::string(home) + "/.ordonarc" : "";
 }
@@ -55,16 +63,21 @@ bool config_exists() { return fs::exists(get_config_path()); }
 
 // ── file util ─────────────────────────────────────────────────
 
-bool writeToFile(const std::string& filePath, const std::string& content)
+bool writeToFile(const std::string &filePath, const std::string &content)
 {
-    try {
+    try
+    {
         fs::path p(filePath);
-        if (p.has_parent_path()) fs::create_directories(p.parent_path());
+        if (p.has_parent_path())
+            fs::create_directories(p.parent_path());
         std::ofstream f(p);
-        if (!f.is_open()) return false;
+        if (!f.is_open())
+            return false;
         f << content;
         return true;
-    } catch (const std::exception& e) {
+    }
+    catch (const std::exception &e)
+    {
         std::cerr << "Error: " << e.what() << '\n';
         return false;
     }
@@ -72,15 +85,17 @@ bool writeToFile(const std::string& filePath, const std::string& content)
 
 // ── expansion ─────────────────────────────────────────────────
 
-std::string expand_tilde(const std::string& path)
+std::string expand_tilde(const std::string &path)
 {
-    if (path.empty() || path[0] != '~') return path;
-    const char* home = getenv("HOME");
-    if (!home) return path;
+    if (path.empty() || path[0] != '~')
+        return path;
+    const char *home = getenv("HOME");
+    if (!home)
+        return path;
     return std::string(home) + path.substr(1);
 }
 
-std::string resolve_env_vars(const std::string& input)
+std::string resolve_env_vars(const std::string &input)
 {
     std::string out;
     out.reserve(input.size());
@@ -89,25 +104,29 @@ std::string resolve_env_vars(const std::string& input)
         if (input[i] == '$' && i + 1 < input.size())
         {
             size_t start = i + 1, end = start;
-            while (end < input.size() && (isalnum(input[end]) || input[end] == '_')) ++end;
+            while (end < input.size() && (isalnum(input[end]) || input[end] == '_'))
+                ++end;
             std::string var = input.substr(start, end - start);
-            const char* val = getenv(var.c_str());
-            if (val) out += val;
+            const char *val = getenv(var.c_str());
+            if (val)
+                out += val;
             i = end - 1;
         }
-        else out += input[i];
+        else
+            out += input[i];
     }
     return out;
 }
 
-std::string resolve_aliases(const std::string& input)
+std::string resolve_aliases(const std::string &input)
 {
     std::istringstream ss(input);
     std::string first, rest;
     ss >> first;
     std::getline(ss, rest);
     auto it = aliases.find(first);
-    if (it != aliases.end()) return it->second + rest;
+    if (it != aliases.end())
+        return it->second + rest;
     return input;
 }
 
@@ -115,40 +134,63 @@ std::string resolve_aliases(const std::string& input)
 
 static std::string git_branch()
 {
-    FILE* f = popen("git rev-parse --abbrev-ref HEAD 2>/dev/null", "r");
-    if (!f) return "";
+#ifdef _WIN32
+    FILE *f = _popen("git rev-parse --abbrev-ref HEAD 2>nul", "r");
+#else
+    FILE *f = popen("git rev-parse --abbrev-ref HEAD 2>/dev/null", "r");
+#endif
+    if (!f)
+        return "";
     char buf[128] = {};
     fgets(buf, sizeof(buf), f);
+#ifdef _WIN32
+    _pclose(f);
+#else
     pclose(f);
+#endif
     std::string branch(buf);
-    if (!branch.empty() && branch.back() == '\n') branch.pop_back();
+    if (!branch.empty() && branch.back() == '\n')
+        branch.pop_back();
     return branch;
 }
 
 static std::string make_prompt()
 {
     std::string cwd;
-    try {
+    try
+    {
         cwd = fs::current_path().string();
-        const char* home = getenv("HOME");
+        const char *home = getenv("HOME");
         if (home && cwd.rfind(home, 0) == 0)
             cwd = "~" + cwd.substr(strlen(home));
-    } catch (...) { cwd = "?"; }
+    }
+    catch (...)
+    {
+        cwd = "?";
+    }
 
     std::string branch = git_branch();
 
     char hostname[256] = {};
+#ifdef _WIN32
+    DWORD size = sizeof(hostname);
+    GetComputerNameA(hostname, &size);
+#else
     gethostname(hostname, sizeof(hostname));
+#endif
 
-    const char* user = getenv("USER");
-    if (!user) user = getenv("USERNAME");
-    if (!user) user = "";
+    const char *user = getenv("USER");
+    if (!user)
+        user = getenv("USERNAME");
+    if (!user)
+        user = "";
 
     time_t now = time(nullptr);
     char timebuf[16] = {};
     strftime(timebuf, sizeof(timebuf), "%H:%M:%S", localtime(&now));
 
-    auto replace = [](std::string s, const std::string& tok, const std::string& val) {
+    auto replace = [](std::string s, const std::string &tok, const std::string &val)
+    {
         size_t pos;
         while ((pos = s.find(tok)) != std::string::npos)
             s.replace(pos, tok.size(), val);
@@ -165,8 +207,10 @@ static std::string make_prompt()
     if (branch.empty())
     {
         size_t pos;
-        while ((pos = out.find("()")) != std::string::npos) out.erase(pos, 2);
-        while ((pos = out.find("  ")) != std::string::npos) out.replace(pos, 2, " ");
+        while ((pos = out.find("()")) != std::string::npos)
+            out.erase(pos, 2);
+        while ((pos = out.find("  ")) != std::string::npos)
+            out.replace(pos, 2, " ");
     }
 
     return out;
@@ -174,7 +218,7 @@ static std::string make_prompt()
 
 // ── built-ins ─────────────────────────────────────────────────
 
-static bool handle_builtin(const std::string& input)
+static bool handle_builtin(const std::string &input)
 {
     std::istringstream ss(input);
     std::string cmd;
@@ -184,13 +228,34 @@ static bool handle_builtin(const std::string& input)
     {
         std::string path;
         ss >> path;
-        if (path.empty()) {
-            const char* home = getenv("HOME");
-            if (home) chdir(home);
-        } else {
+        if (path.empty())
+        {
+            const char *home = getenv("USERPROFILE");
+#ifndef _WIN32
+            if (!home)
+                home = getenv("HOME");
+#endif
+            if (home)
+            {
+#ifdef _WIN32
+                _chdir(home);
+#else
+                chdir(home);
+#endif
+                plugins_on_cd(home); // use home here
+            }
+        }
+        else
+        {
             path = expand_tilde(path);
+#ifdef _WIN32
+            if (_chdir(path.c_str()) != 0)
+#else
             if (chdir(path.c_str()) != 0)
+#endif
                 std::cerr << "cd: " << path << ": No such file or directory\n";
+            else
+                plugins_on_cd(path); // only call on success
         }
         return true;
     }
@@ -200,15 +265,23 @@ static bool handle_builtin(const std::string& input)
         ss >> pair;
         size_t eq = pair.find('=');
         if (eq != std::string::npos)
+        {
+#ifdef _WIN32
+            _putenv_s(pair.substr(0, eq).c_str(), pair.substr(eq + 1).c_str());
+#else
             setenv(pair.substr(0, eq).c_str(), pair.substr(eq + 1).c_str(), 1);
+#endif
+        }
         return true;
     }
     if (cmd == "prompt")
     {
         std::string fmt;
         std::getline(ss, fmt);
-        if (!fmt.empty() && fmt[0] == ' ') fmt = fmt.substr(1);
-        if (!fmt.empty()) prompt_format = fmt;
+        if (!fmt.empty() && fmt[0] == ' ')
+            fmt = fmt.substr(1);
+        if (!fmt.empty())
+            prompt_format = fmt;
         return true;
     }
     return false;
@@ -222,7 +295,8 @@ void make_alias(std::string input)
     std::string cmd, name, value;
     ss >> cmd >> name;
     std::getline(ss, value);
-    if (value.empty()) return;
+    if (value.empty())
+        return;
     value = value.substr(1);
     aliases[name] = value;
 }
@@ -230,20 +304,23 @@ void make_alias(std::string input)
 void save_aliases()
 {
     std::ofstream f(get_alias_path());
-    if (!f.is_open()) return;
-    for (const auto& [name, value] : aliases)
+    if (!f.is_open())
+        return;
+    for (const auto &[name, value] : aliases)
         f << name << '=' << value << '\n';
 }
 
 void load_aliases()
 {
     std::ifstream f(get_alias_path());
-    if (!f.is_open()) return;
+    if (!f.is_open())
+        return;
     std::string line;
     while (std::getline(f, line))
     {
         size_t eq = line.find('=');
-        if (eq == std::string::npos) continue;
+        if (eq == std::string::npos)
+            continue;
         aliases[line.substr(0, eq)] = line.substr(eq + 1);
     }
 }
@@ -253,12 +330,15 @@ void load_aliases()
 void load_rc()
 {
     std::string path = get_rc_path();
-    if (path.empty() || !fs::exists(path)) return;
+    if (path.empty() || !fs::exists(path))
+        return;
     std::ifstream f(path);
     std::string line;
     while (std::getline(f, line))
     {
-        if (line.empty() || line[0] == '#') continue;
+        if (line.empty() || line[0] == '#')
+            continue;
+        
         take_input(line);
     }
 }
@@ -266,16 +346,20 @@ void load_rc()
 void load_config()
 {
     std::ifstream f(get_config_path());
-    if (!f.is_open()) return;
+    if (!f.is_open())
+        return;
     std::string line;
     while (std::getline(f, line))
     {
-        if (line.empty() || line[0] == '#') continue;
+        if (line.empty() || line[0] == '#')
+            continue;
         size_t eq = line.find('=');
-        if (eq == std::string::npos) continue;
+        if (eq == std::string::npos)
+            continue;
         std::string key = line.substr(0, eq);
         std::string val = line.substr(eq + 1);
-        if (key == "prompt") prompt_format = val;
+        if (key == "prompt")
+            prompt_format = val;
     }
 }
 
@@ -285,8 +369,10 @@ std::string read_line()
 {
     bool eof = false;
     std::string input = editor.readline(make_prompt(), eof);
-    if (eof) suicide();
-    if (!input.empty()) editor.history_add(input);
+    if (eof)
+        suicide();
+    if (!input.empty())
+        editor.history_add(input);
     return input;
 }
 
@@ -298,6 +384,7 @@ void suicide()
     predictor_save(get_predictor_path());
     save_aliases();
     term_disable_raw();
+    plugins_unload();
     std::cout << "\r\nBye!\n";
     exit(0);
 }
@@ -306,13 +393,15 @@ void init()
 {
     load_aliases();
 
-    editor.set_hint_callback([](const std::string& input) -> std::string {
-        return predictor_suggest(input);
-    });
+    editor.set_hint_callback([](const std::string &input) -> std::string
+                             {
+        std::string h = plugins_on_hint(input);
+        if (!h.empty()) return h;
+        return predictor_suggest(input); });
     editor.set_max_history(1000);
     editor.history_load(get_history_path());
     predictor_load(get_predictor_path());
-
+    plugins_load();
     if (!config_exists())
         writeToFile(get_config_path(), "# Ordona config\n# prompt={cwd} ({branch}) $>\n");
     else
@@ -321,7 +410,9 @@ void init()
     load_rc();
 }
 
-void draw_prompt() {}
+void draw_prompt()
+{
+}
 
 // ── take_input ────────────────────────────────────────────────
 
@@ -336,9 +427,32 @@ void take_input(std::string input)
         suicide();
     else if (input.rfind("alias", 0) == 0)
         make_alias(input);
+    else if (input.rfind("plugin ", 0) == 0)
+    {
+        std::istringstream ss(input);
+        std::string _, subcmd, arg;
+        ss >> _ >> subcmd >> arg;
+
+        if (subcmd == "install")
+            plugin_install(arg);
+        else if (subcmd == "remove")
+            plugin_remove(arg);
+        else if (subcmd == "enable")
+            plugin_enable(arg);
+        else if (subcmd == "disable")
+            plugin_disable(arg);
+        else if (subcmd == "update")
+            plugins_update_all();
+        else if (subcmd == "list")
+            plugin_list();
+        else
+            std::cerr << "usage: plugin install/remove/enable/disable/update/list\n";
+    }
     else
     {
         input = resolve_aliases(input);
+        if (plugins_on_command(input))
+            return;
         if (!handle_builtin(input))
         {
             predictor_train(input);

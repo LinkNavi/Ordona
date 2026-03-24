@@ -11,9 +11,10 @@ void term_enable_raw()
     if (!saved) { GetConsoleMode(h, &orig_mode); saved = true; }
     DWORD raw = orig_mode;
     raw &= ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT);
-    raw |= ENABLE_VIRTUAL_TERMINAL_INPUT;
+    raw &= ~ENABLE_VIRTUAL_TERMINAL_INPUT; // remove this
     SetConsoleMode(h, raw);
 
+    // only enable VT on output, not input
     HANDLE ho = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD om;
     GetConsoleMode(ho, &om);

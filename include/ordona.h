@@ -19,6 +19,7 @@ std::string resolve_env_vars(const std::string& input);
 std::string resolve_aliases(const std::string& input);
 std::string read_line();
 void draw_prompt();
+std::string ordona_dir();
 void take_input(std::string input);
 void make_alias(std::string input);
 void save_aliases();
